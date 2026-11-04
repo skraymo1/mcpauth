@@ -1,0 +1,28 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+name: entra-chat-demo
+
+services:
+  web:
+    project: .
+    host: containerapp
+    language: docker
+    docker:
+      path: ./Dockerfile
+      context: ..
+      # Builds in Azure Container Registry, so local Docker is not required.
+      # Set to false (and install Docker) if ACR Tasks is blocked on your subscription.
+      remoteBuild: true
+
+hooks:
+  # Create or update the Entra app registrations and write their IDs and secret to the azd environment.
+  preprovision:
+    shell: pwsh
+    run: ./infra/hooks/preprovision.ps1
+  # Register the deployed app's URL as the sign-in redirect URI.
+  postprovision:
+    shell: pwsh
+    run: ./infra/hooks/postprovision.ps1
+  # azd down does not remove Entra objects, so delete the app registrations here.
+  postdown:
+    shell: pwsh
+    run: ./infra/hooks/postdown.ps1

@@ -1,0 +1,186 @@
+<policies>
+  <!--
+    MOCK ONLY. Stands in for the AWS side so the real bridge policy (apim-policy.xml) can run
+    unchanged before the AWS stack exists. Deployed by azure-gateway.bicep when deployMockAws=true.
+      POST /mock-aws/oauth2/token  imitates the Amazon Cognito client-credentials token endpoint.
+      POST /mock-aws/mcp           imitates the AWS-hosted MCP server (stateless Streamable HTTP, JSON responses).
+    Tokens are HMAC-signed with the per-client Cognito secrets held in Key Vault, so this API is only
+    usable with credentials that only the gateway holds. Fictional data only. Redeploy with
+    deployMockAws=false and the real Cognito/AWS values when the AWS stack exists.
+  -->
+  <inbound>
+    <base />
+    <choose>
+      <when condition='@(context.Operation.Id == "mock-token")'>
+        <set-variable name="mock-client-id" value='@{
+          var auth = context.Request.Headers.GetValueOrDefault("Authorization", "");
+          if (!auth.StartsWith("Basic ", StringComparison.OrdinalIgnoreCase)) { return ""; }
+          string decoded;
+          try { decoded = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(auth.Substring(6).Trim())); }
+          catch (Exception) { return ""; }
+          var separator = decoded.IndexOf(":", StringComparison.Ordinal);
+          if (separator &lt;= 0) { return ""; }
+          var id = decoded.Substring(0, separator);
+          var secret = decoded.Substring(separator + 1);
+          if (id == "{{cognito-foundry-client-id}}" &amp;&amp; secret == "{{cognito-foundry-client-secret}}") { return id; }
+          if (id == "{{cognito-copilot-client-id}}" &amp;&amp; secret == "{{cognito-copilot-client-secret}}") { return id; }
+          return "";
+        }' />
+        <choose>
+          <when condition='@(String.IsNullOrEmpty((string)context.Variables["mock-client-id"]))'>
+            <return-response>
+              <set-status code="401" reason="Unauthorized" />
+              <set-header name="Content-Type" exists-action="override"><value>application/json</value></set-header>
+              <set-body>{"error":"invalid_client"}</set-body>
+            </return-response>
+          </when>
+          <when condition='@(!context.Request.Body.As&lt;string&gt;(preserveContent: true).Contains("grant_type=client_credentials"))'>
+            <return-response>
+              <set-status code="400" reason="Bad Request" />
+              <set-header name="Content-Type" exists-action="override"><value>application/json</value></set-header>
+              <set-body>{"error":"unsupported_grant_type"}</set-body>
+            </return-response>
+          </when>
+        </choose>
+        <return-response>
+          <set-status code="200" reason="OK" />
+          <set-header name="Content-Type" exists-action="override"><value>application/json</value></set-header>
+          <set-header name="Cache-Control" exists-action="override"><value>no-store</value></set-header>
+          <set-body>@{
+            var clientId = (string)context.Variables["mock-client-id"];
+            var secret = clientId == "{{cognito-foundry-client-id}}" ? "{{cognito-foundry-client-secret}}" : "{{cognito-copilot-client-secret}}";
+            var expires = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds + 3600;
+            var payload = clientId + "|" + expires.ToString();
+            var hmac = new System.Security.Cryptography.HMACSHA256(System.Text.Encoding.UTF8.GetBytes(secret));
+            var signature = Convert.ToBase64String(hmac.ComputeHash(System.Text.Encoding.UTF8.GetBytes(payload)));
+            var token = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(payload)) + "." + signature;
+            return new JObject(
+              new JProperty("access_token", token),
+              new JProperty("token_type", "Bearer"),
+              new JProperty("expires_in", 3600)).ToString(Newtonsoft.Json.Formatting.None);
+          }</set-body>
+        </return-response>
+      </when>
+      <when condition='@(context.Operation.Id == "mock-mcp-post")'>
+        <!-- Same checks as server.mjs: a valid, unexpired token from one of the two known clients. -->
+        <set-variable name="mock-aws-caller" value='@{
+          var auth = context.Request.Headers.GetValueOrDefault("Authorization", "");
+          if (!auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)) { return ""; }
+          var parts = auth.Substring(7).Trim().Split(new string[] { "." }, StringSplitOptions.None);
+          if (parts.Length != 2) { return ""; }
+          string payload;
+          try { payload = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(parts[0])); }
+          catch (Exception) { return ""; }
+          var fields = payload.Split(new string[] { "|" }, StringSplitOptions.None);
+          if (fields.Length != 2) { return ""; }
+          string secret;
+          if (fields[0] == "{{cognito-foundry-client-id}}") { secret = "{{cognito-foundry-client-secret}}"; }
+          else if (fields[0] == "{{cognito-copilot-client-id}}") { secret = "{{cognito-copilot-client-secret}}"; }
+          else { return ""; }
+          var hmac = new System.Security.Cryptography.HMACSHA256(System.Text.Encoding.UTF8.GetBytes(secret));
+          var expected = Convert.ToBase64String(hmac.ComputeHash(System.Text.Encoding.UTF8.GetBytes(payload)));
+          long expires;
+          if (expected != parts[1] || !long.TryParse(fields[1], out expires)) { return ""; }
+          var now = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds;
+          return expires > now ? fields[0] : "";
+        }' />
+        <choose>
+          <when condition='@(String.IsNullOrEmpty((string)context.Variables["mock-aws-caller"]))'>
+            <return-response>
+              <set-status code="401" reason="Unauthorized" />
+              <set-header name="WWW-Authenticate" exists-action="override"><value>Bearer error="invalid_token"</value></set-header>
+              <set-header name="Content-Type" exists-action="override"><value>application/json</value></set-header>
+              <set-body>{"error":"Invalid access token"}</set-body>
+            </return-response>
+          </when>
+        </choose>
+        <set-variable name="mock-rpc-kind" value='@{
+          try {
+            var rpc = JObject.Parse(context.Request.Body.As&lt;string&gt;(preserveContent: true));
+            return rpc["id"] == null ? "notification" : "request";
+          }
+          catch (Exception) { return "invalid"; }
+        }' />
+        <choose>
+          <when condition='@((string)context.Variables["mock-rpc-kind"] == "notification")'>
+            <return-response>
+              <set-status code="202" reason="Accepted" />
+            </return-response>
+          </when>
+          <when condition='@((string)context.Variables["mock-rpc-kind"] == "invalid")'>
+            <return-response>
+              <set-status code="400" reason="Bad Request" />
+              <set-header name="Content-Type" exists-action="override"><value>application/json</value></set-header>
+              <set-body>{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"Parse error"}}</set-body>
+            </return-response>
+          </when>
+        </choose>
+        <return-response>
+          <set-status code="200" reason="OK" />
+          <set-header name="Content-Type" exists-action="override"><value>application/json</value></set-header>
+          <set-header name="x-mock-aws" exists-action="override"><value>true</value></set-header>
+          <set-body>@{
+            var rpc = JObject.Parse(context.Request.Body.As&lt;string&gt;(preserveContent: true));
+            var method = (string)rpc["method"];
+            var response = new JObject(new JProperty("jsonrpc", "2.0"), new JProperty("id", rpc["id"]));
+            if (method == "initialize") {
+              var version = (string)rpc.SelectToken("params.protocolVersion");
+              response["result"] = new JObject(
+                new JProperty("protocolVersion", String.IsNullOrEmpty(version) ? "2025-06-18" : version),
+                new JProperty("capabilities", new JObject(new JProperty("tools", new JObject(new JProperty("listChanged", false))))),
+                new JProperty("serverInfo", new JObject(new JProperty("name", "aws-inventory-demo (APIM mock)"), new JProperty("version", "1.0.0"))));
+            }
+            else if (method == "ping") {
+              response["result"] = new JObject();
+            }
+            else if (method == "tools/list") {
+              response["result"] = JObject.Parse("{ 'tools': [ { 'name': 'get_inventory', 'description': 'Read fictional inventory for a demo SKU. No production data.', 'inputSchema': { 'type': 'object', 'properties': { 'sku': { 'type': 'string', 'minLength': 1, 'maxLength': 64 } }, 'required': [ 'sku' ] }, 'annotations': { 'readOnlyHint': true, 'destructiveHint': false, 'openWorldHint': false } } ] }");
+            }
+            else if (method == "tools/call") {
+              var name = (string)rpc.SelectToken("params.name");
+              var sku = (string)rpc.SelectToken("params.arguments.sku");
+              if (name != "get_inventory") {
+                response["error"] = new JObject(new JProperty("code", -32602), new JProperty("message", "Unknown tool: " + name));
+              }
+              else if (sku != "WIDGET-001") {
+                response["result"] = JObject.Parse("{ 'isError': true, 'content': [ { 'type': 'text', 'text': 'Unknown demo SKU; use WIDGET-001.' } ] }");
+              }
+              else {
+                var data = new JObject(
+                  new JProperty("sku", sku),
+                  new JProperty("quantity", 42),
+                  new JProperty("warehouse", "ATL-DEMO"),
+                  new JProperty("source", "fictional-demo-data (APIM mock of the AWS MCP server)"),
+                  new JProperty("cognitoClientId", (string)context.Variables["mock-aws-caller"]));
+                response["result"] = new JObject(
+                  new JProperty("content", new JArray(new JObject(new JProperty("type", "text"), new JProperty("text", data.ToString(Newtonsoft.Json.Formatting.None))))),
+                  new JProperty("structuredContent", data));
+              }
+            }
+            else {
+              response["error"] = new JObject(new JProperty("code", -32601), new JProperty("message", "Method not found"));
+            }
+            return response.ToString(Newtonsoft.Json.Formatting.None);
+          }</set-body>
+        </return-response>
+      </when>
+      <otherwise>
+        <return-response>
+          <set-status code="405" reason="Method Not Allowed" />
+          <set-header name="Allow" exists-action="override"><value>POST</value></set-header>
+          <set-header name="Content-Type" exists-action="override"><value>application/json</value></set-header>
+          <set-body>{"error":"This stateless MCP endpoint supports POST only."}</set-body>
+        </return-response>
+      </otherwise>
+    </choose>
+  </inbound>
+  <backend>
+    <base />
+  </backend>
+  <outbound>
+    <base />
+  </outbound>
+  <on-error>
+    <base />
+  </on-error>
+</policies>

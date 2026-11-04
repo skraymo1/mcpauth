@@ -1,0 +1,139 @@
+<policies>
+  <inbound>
+    <base />
+    <!-- Install on the two HTTP APIs described in docs/m2m-walkthrough.md, not at global scope. -->
+    <choose>
+      <when condition='@(context.Api.Id == "foundry-mcp")'>
+        <validate-jwt header-name="Authorization" require-scheme="Bearer"
+                      require-expiration-time="true" require-signed-tokens="true"
+                      failed-validation-httpcode="401"
+                      failed-validation-error-message="Unauthorized gateway caller">
+          <openid-config url="https://login.microsoftonline.com/{{entra-tenant-id}}/v2.0/.well-known/openid-configuration" />
+          <audiences>
+            <audience>{{entra-api-client-id}}</audience>
+          </audiences>
+          <issuers>
+            <issuer>https://login.microsoftonline.com/{{entra-tenant-id}}/v2.0</issuer>
+          </issuers>
+          <required-claims>
+            <claim name="roles" match="all"><value>Mcp.Invoke</value></claim>
+            <claim name="oid" match="all"><value>{{foundry-principal-id}}</value></claim>
+          </required-claims>
+        </validate-jwt>
+        <set-variable name="aws-client-id" value="{{cognito-foundry-client-id}}" />
+        <set-variable name="aws-client-secret" value="{{cognito-foundry-client-secret}}" />
+      </when>
+      <when condition='@(context.Api.Id == "copilot-mcp")'>
+        <!-- APIM performs key validation with Subscription required enabled. -->
+        <choose>
+          <when condition='@(context.Subscription == null || context.Subscription.Id != "{{copilot-subscription-id}}")'>
+            <return-response>
+              <set-status code="403" reason="Forbidden" />
+              <set-body>Approved Copilot subscription required.</set-body>
+            </return-response>
+          </when>
+        </choose>
+        <set-variable name="aws-client-id" value="{{cognito-copilot-client-id}}" />
+        <set-variable name="aws-client-secret" value="{{cognito-copilot-client-secret}}" />
+      </when>
+      <otherwise>
+        <return-response>
+          <set-status code="403" reason="Forbidden" />
+          <set-body>Unknown integration.</set-body>
+        </return-response>
+      </otherwise>
+    </choose>
+
+    <!-- Reuse one Cognito token per route until shortly before it expires. The key is built only from
+         trusted configuration (token URL, route's client ID, scope), never from caller input, so the two
+         routes never share a token. Keep the scope here in sync with the token request body below.
+         Consumption has no built-in cache: without an external Redis-compatible cache, lookups miss
+         and every request fetches a token. -->
+    <set-variable name="aws-token-cache-key" value='@("cognito-token|{{cognito-token-url}}|" + (string)context.Variables["aws-client-id"] + "|mcp-demo/inventory.read")' />
+    <cache-lookup-value key='@((string)context.Variables["aws-token-cache-key"])' variable-name="aws-access-token" caching-type="external" />
+    <choose>
+      <when condition='@(String.IsNullOrEmpty(context.Variables.GetValueOrDefault&lt;string&gt;("aws-access-token", "")))'>
+        <send-request mode="new" response-variable-name="cognito-response" timeout="15" ignore-error="true">
+          <set-url>{{cognito-token-url}}</set-url>
+          <set-method>POST</set-method>
+          <set-header name="Authorization" exists-action="override">
+            <value>@("Basic " + Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes((string)context.Variables["aws-client-id"] + ":" + (string)context.Variables["aws-client-secret"])))</value>
+          </set-header>
+          <set-header name="Content-Type" exists-action="override">
+            <value>application/x-www-form-urlencoded</value>
+          </set-header>
+          <set-body>grant_type=client_credentials&amp;scope=mcp-demo%2Finventory.read</set-body>
+        </send-request>
+        <choose>
+          <when condition='@(context.Variables["cognito-response"] == null || ((IResponse)context.Variables["cognito-response"]).StatusCode != 200)'>
+            <trace source="mcp-m2m" severity="error">
+              <message>Cognito token acquisition failed; request blocked.</message>
+            </trace>
+            <return-response>
+              <set-status code="502" reason="Bad Gateway" />
+              <set-body>Backend authentication unavailable.</set-body>
+            </return-response>
+          </when>
+        </choose>
+        <set-variable name="aws-access-token" value='@{
+          var body = ((IResponse)context.Variables["cognito-response"]).Body.As&lt;JObject&gt;(preserveContent: true);
+          var token = (string)body["access_token"];
+          var tokenType = (string)body["token_type"];
+          var expires = (int?)body["expires_in"];
+          if (String.IsNullOrWhiteSpace(token) || !String.Equals(tokenType, "Bearer", StringComparison.OrdinalIgnoreCase) || !expires.HasValue || expires.Value &lt;= 0) {
+            throw new Exception("Invalid token response");
+          }
+          return token;
+        }' />
+        <!-- Expire the entry 5 minutes early; tokens valid for 10 minutes or less are kept for half their lifetime. -->
+        <set-variable name="aws-token-cache-seconds" value='@{
+          var expires = (int)((IResponse)context.Variables["cognito-response"]).Body.As&lt;JObject&gt;(preserveContent: true)["expires_in"];
+          return Math.Max(1, expires &gt; 600 ? expires - 300 : expires / 2);
+        }' />
+        <cache-store-value key='@((string)context.Variables["aws-token-cache-key"])' value='@((string)context.Variables["aws-access-token"])' duration='@((int)context.Variables["aws-token-cache-seconds"])' caching-type="external" />
+      </when>
+    </choose>
+    <set-header name="Authorization" exists-action="override">
+      <value>@("Bearer " + (string)context.Variables["aws-access-token"])</value>
+    </set-header>
+    <set-header name="Ocp-Apim-Subscription-Key" exists-action="delete" />
+    <set-query-parameter name="subscription-key" exists-action="delete" />
+    <set-header name="x-correlation-id" exists-action="override">
+      <value>@(context.RequestId.ToString())</value>
+    </set-header>
+    <set-backend-service base-url="{{aws-mcp-origin}}" />
+    <rewrite-uri template="/mcp" copy-unmatched-params="false" />
+  </inbound>
+  <backend>
+    <forward-request timeout="60" buffer-response="false" />
+  </backend>
+  <outbound>
+    <base />
+    <!-- If AWS rejects the token, drop the cached entry so the next request fetches a fresh one. -->
+    <choose>
+      <when condition='@(context.Response.StatusCode == 401 &amp;&amp; context.Variables.ContainsKey("aws-token-cache-key"))'>
+        <cache-remove-value key='@((string)context.Variables["aws-token-cache-key"])' caching-type="external" />
+      </when>
+    </choose>
+  </outbound>
+  <on-error>
+    <trace source="mcp-m2m" severity="error">
+      <message>Gateway policy failed; request blocked.</message>
+      <metadata name="reason" value="@(context.LastError.Reason)" />
+    </trace>
+    <choose>
+      <when condition='@(context.LastError.Source == "validate-jwt" || context.LastError.Reason == "SubscriptionKeyNotFound" || context.LastError.Reason == "SubscriptionKeyInvalid")'>
+        <return-response>
+          <set-status code="401" reason="Unauthorized" />
+          <set-body>Unauthorized gateway caller.</set-body>
+        </return-response>
+      </when>
+      <otherwise>
+        <return-response>
+          <set-status code="502" reason="Bad Gateway" />
+          <set-body>Gateway request failed.</set-body>
+        </return-response>
+      </otherwise>
+    </choose>
+  </on-error>
+</policies>

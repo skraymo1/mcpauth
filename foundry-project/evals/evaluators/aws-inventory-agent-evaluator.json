@@ -1,0 +1,54 @@
+{
+  "dimensions": [
+    {
+      "always_applicable": false,
+      "description": "There is an observable aws_inventory.get_inventory tool invocation in the logs, and the logged call includes a sku parameter that exactly matches the user's requested SKU string (byte-for-byte match of the SKU as provided by the user).",
+      "id": "tool_called_with_requested_sku",
+      "weight": 9
+    },
+    {
+      "always_applicable": false,
+      "description": "The agent's reply contains the response.quantity value exactly as returned by the tool: if the tool returned a JSON number, the agent must include that numeric literal textually (e.g., '5'); if the tool returned a string, the agent must reproduce that string exactly (case and characters preserved). Conversions to words (e.g., 'five'), rounding, added units, or other alterations are failures.",
+      "id": "quantity_echoed_verbatim",
+      "weight": 6
+    },
+    {
+      "always_applicable": false,
+      "description": "The agent's reply contains the response.warehouse value exactly as returned by the tool. For simple strings this means exact character-for-character reproduction; for lists/objects the agent must reproduce the returned structure or its exact textual serialization without dropping, inventing, or semantically altering entries.",
+      "id": "warehouse_echoed_verbatim",
+      "weight": 5
+    },
+    {
+      "always_applicable": false,
+      "description": "If the tool response includes cognitoClientId, the agent echoes that exact string verbatim in its reply. If the tool omits cognitoClientId the agent either explicitly states it is absent (e.g., 'cognitoClientId not present') or omits it; the agent must not fabricate, alter, or mask a cognitoClientId.",
+      "id": "cognito_client_id_handled_correctly",
+      "weight": 4
+    },
+    {
+      "always_applicable": false,
+      "description": "When the tool call returns an error (status 'error', RPC/HTTP failure, or timeout) the agent must state that the tool failed plainly (e.g., 'tool failed: \u003cerror_message\u003e' or an unambiguous equivalent) and must not present concrete inventory values. When the tool returns a not-found result (status 'not_found' or explicit 'unknown SKU' message) the agent must plainly state the SKU is unknown/not found and must not invent quantity or warehouse values.",
+      "id": "explicit_error_and_not_found_reporting",
+      "weight": 5
+    },
+    {
+      "always_applicable": false,
+      "description": "The agent does not add any invented inventory data or additional metadata that were not present in the tool response. This includes fabricated quantities, fabricated warehouse names, implied availability, added units, or any derived estimates presented as facts. Any such invented information is scored as a failure.",
+      "id": "no_invented_information",
+      "weight": 5
+    },
+    {
+      "always_applicable": false,
+      "description": "For complex or partial tool responses (e.g., warehouse returned as a list or object, quantity returned as a string, or some fields omitted), the agent reproduces the returned structure/values faithfully. For omitted fields the agent must report which fields are missing or unknown while still echoing present fields exactly. Reordering, dropping entries, aggregating, or summarizing complex structures in a way that changes meaning are failures.",
+      "id": "complex_and_partial_response_fidelity",
+      "weight": 3
+    },
+    {
+      "always_applicable": true,
+      "description": "Other important quality factors not covered by listed criteria.",
+      "id": "general_quality",
+      "weight": 5
+    }
+  ],
+  "pass_threshold": 0.5,
+  "type": "rubric"
+}

@@ -1,0 +1,10 @@
+# Send only what the image needs; everything else in the repository stays out of the build context.
+*
+!entra-chat-demo/Dockerfile
+!entra-chat-demo/requirements.txt
+!entra-chat-demo/config.py
+!entra-chat-demo/chat.py
+!entra-chat-demo/mcp_server.py
+!entra-chat-demo/webapp.py
+!entra-chat-demo/serve.py
+!foundry-project/evals/datasets/aws-inventory-agent-turn-tests.jsonl

@@ -1,0 +1,82 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Demonstration Cognito M2M identities for an AWS-hosted inventory MCP server.
+
+Parameters:
+  DomainPrefix:
+    Type: String
+    Description: Globally unique prefix for the Cognito OAuth domain.
+    MinLength: 3
+    MaxLength: 63
+    AllowedPattern: "[a-z0-9]+(-[a-z0-9]+)*"
+
+Resources:
+  Pool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: mcp-m2m-demo
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+
+  Domain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Ref DomainPrefix
+      UserPoolId: !Ref Pool
+
+  InventoryResource:
+    Type: AWS::Cognito::UserPoolResourceServer
+    Properties:
+      UserPoolId: !Ref Pool
+      Identifier: mcp-demo
+      Name: Demo inventory MCP API
+      Scopes:
+        - ScopeName: inventory.read
+          ScopeDescription: Read fictional inventory through MCP.
+
+  FoundryClient:
+    Type: AWS::Cognito::UserPoolClient
+    DependsOn: InventoryResource
+    Properties:
+      UserPoolId: !Ref Pool
+      ClientName: mcp-foundry-gateway
+      GenerateSecret: true
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows:
+        - client_credentials
+      AllowedOAuthScopes:
+        - mcp-demo/inventory.read
+      AccessTokenValidity: 15
+      TokenValidityUnits:
+        AccessToken: minutes
+      PreventUserExistenceErrors: ENABLED
+
+  CopilotClient:
+    Type: AWS::Cognito::UserPoolClient
+    DependsOn: InventoryResource
+    Properties:
+      UserPoolId: !Ref Pool
+      ClientName: mcp-copilot-gateway
+      GenerateSecret: true
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows:
+        - client_credentials
+      AllowedOAuthScopes:
+        - mcp-demo/inventory.read
+      AccessTokenValidity: 15
+      TokenValidityUnits:
+        AccessToken: minutes
+      PreventUserExistenceErrors: ENABLED
+
+Outputs:
+  UserPoolId:
+    Value: !Ref Pool
+  FoundryClientId:
+    Value: !Ref FoundryClient
+  CopilotClientId:
+    Value: !Ref CopilotClient
+  TokenEndpoint:
+    Value: !Sub https://${DomainPrefix}.auth.${AWS::Region}.amazoncognito.com/oauth2/token
+  Issuer:
+    Value: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${Pool}
+  Scope:
+    Value: mcp-demo/inventory.read

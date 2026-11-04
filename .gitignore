@@ -1,0 +1,16 @@
+# Local azd and Entra state: environment values and protected credentials
+.azure/
+.entra/
+.env
+.env.*
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# Node.js
+node_modules/
+
+# Packaged bundles
+*.zip

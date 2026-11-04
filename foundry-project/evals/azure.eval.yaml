@@ -1,0 +1,15 @@
+datasets:
+  - name: aws-inventory-agent-turn-tests
+    file: ./datasets/aws-inventory-agent-turn-tests.jsonl
+    tags:
+      evaluation_level: turn
+evaluators:
+  - name: aws-inventory-agent-evaluator
+    source: ./evaluators/aws-inventory-agent-evaluator.json
+    displayName: aws-inventory-agent-evaluator
+    categories:
+      - quality
+      - agents
+    supportedEvaluationLevels:
+      - turn
+      - conversation
