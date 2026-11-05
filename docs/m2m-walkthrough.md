@@ -22,6 +22,9 @@ pool and AWS-hosted MCP server have not been provisioned or exercised. Product
 documentation was reviewed on November 3, 2026; preview features, tenant UI,
 and availability can differ.
 
+The one-`azd up` route in the [root README](../README.md#deploy-everything-with-one-azd-up)
+automates sections 6.1, 6.2, 7, and 7.1 against the same mock. It compiles and
+passes ARM preflight validation but has not yet been deployed end to end.
 For a separate **per-user Entra OAuth chat demo**, see
 [`entra-chat-demo\README.md`](../entra-chat-demo/README.md). You sign in once through real Entra
 app registrations, then ask questions in a chat UI; `gpt-5-mini` answers by
@@ -123,6 +126,9 @@ run from there unless a step changes directory.
 | `m2m-gateway\apim-external-cache.bicep` | Registers Redis as APIM's external cache and applies the cache policy to both routes |
 | `m2m-gateway\apim-mock-aws-policy.xml` | Demo-only APIM mock of the Cognito token endpoint and the AWS MCP server (fictional data) |
 | `foundry-project\` | Copy of the `azd-ai-starter-basic` template [14] used for the section 7.1 Foundry project, plus the agent's evaluation dataset and evaluator |
+| `azure.yaml`, `infra\main.bicep` | One `azd up` deploys the Azure resources in Bicep; the hooks manage the Entra registrations and the secrets Bicep needs, and create the Foundry agent, all using the signed-in `az` user (see the README's "Deploy everything with one azd up"). The sections below remain the manual route |
+| `infra\modules\*.bicep` | Modules for the unified deployment: gateway and Redis wiring, Redis connection string, and Foundry project identity |
+| `infra\hooks\*.ps1` | Root azd hooks create or update the three Entra registrations and app-role assignments using the signed-in user, generate the mock Cognito secrets, set the deployed redirect URI, create the section 7.1 Foundry agent, and clean up those registrations on `azd down` |
 
 To present without deploying anything, use the diagrams, configuration tables,
 policy file, and illustrative result in section 9. There is no need to enter
@@ -286,6 +292,11 @@ Do not cache MCP tool results as a substitute for caching credentials.
 
 ### 6.1 Deploy the Azure side with Bicep (optional AWS mock)
 
+> The root `azd up` ([README](../README.md#deploy-everything-with-one-azd-up))
+> runs this APIM deployment and section 6.2. The preprovision hook creates the
+> Entra registrations using the signed-in `az` user. The steps below are the
+> manual route.
+
 `m2m-gateway\azure-gateway.bicep` deploys this section in one step. It creates an
 APIM Consumption instance with a managed identity, a Key Vault holding the two
 Cognito client secrets, the named values above, both APIs with
@@ -391,6 +402,12 @@ Cognito. [32]
 Use a Foundry project with an enabled managed identity, a model deployment,
 and an agent. Use the project identity here for a straightforward demonstration;
 agent-scoped identity is an alternative where supported. [1]
+
+> With root `azd up`, the preprovision hook creates the gateway app registration,
+> and the postprovision hook grants `Mcp.Invoke` to the Foundry project identity.
+> Bicep creates the project connection and the postprovision hook creates the
+> agent through the project's REST API. Set `AGENT_REQUIRE_APPROVAL=never` before
+> the agent is first created to skip tool-approval prompts.
 
 1. Register a single-tenant Microsoft Entra application representing the APIM
    gateway API. Set its Application ID URI to `api://<application-client-GUID>`.
@@ -688,6 +705,10 @@ run direct checks only from an explicitly authorized network location.
 | AWS returns 503 | JWKS retrieval or verification infrastructure failure; do not bypass verification |
 | Tool discovery fails despite valid auth | Exact `/mcp` path, POST routing, MCP headers, proxy buffering, platform data policy |
 
+For failures specific to the root `azd up` route (Graph permission refused, the
+Foundry agent hook hitting 401/403 before role assignments propagate), see the
+[README troubleshooting table](../README.md#troubleshooting).
+
 Before production: configure a token cache store (section 6.2), secret
 rotation, rate limits (one right after the cache lookup keeps a cache outage
 from flooding Cognito [28]), protected gateway ingress/egress, least-privilege
@@ -715,6 +736,9 @@ Then purge the soft-deleted Key Vault, APIM instance, and Foundry account with
 `az keyvault purge`, `az apim deletedservice purge`, and
 `az cognitiveservices account purge`. Finally, delete the gateway API app
 registration.
+
+For the root `azd up` deployment, run `az login`, then `azd down --purge` from
+the repository root. Its `postdown` hook deletes the Entra registrations.
 
 ## References
 

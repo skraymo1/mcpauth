@@ -1,0 +1,81 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "environmentName": {
+      "value": "${AZURE_ENV_NAME}"
+    },
+    "location": {
+      "value": "${AZURE_LOCATION}"
+    },
+    "principalId": {
+      "value": "${AZURE_PRINCIPAL_ID}"
+    },
+    "principalType": {
+      "value": "${AZURE_PRINCIPAL_TYPE}"
+    },
+    "gatewayApiClientId": {
+      "value": "${ENTRA_GATEWAY_API_CLIENT_ID}"
+    },
+    "chatApiClientId": {
+      "value": "${ENTRA_CHAT_API_CLIENT_ID}"
+    },
+    "chatWebClientId": {
+      "value": "${ENTRA_CHAT_WEB_CLIENT_ID}"
+    },
+    "publisherEmail": {
+      "value": "${APIM_PUBLISHER_EMAIL}"
+    },
+    "publisherName": {
+      "value": "${APIM_PUBLISHER_NAME=M2M MCP demo}"
+    },
+    "oidcClientSecret": {
+      "value": "${OIDC_CLIENT_SECRET}"
+    },
+    "deployMockAws": {
+      "value": "${DEPLOY_MOCK_AWS=true}"
+    },
+    "cognitoTokenUrl": {
+      "value": "${COGNITO_TOKEN_URL=}"
+    },
+    "cognitoFoundryClientId": {
+      "value": "${COGNITO_FOUNDRY_CLIENT_ID=}"
+    },
+    "cognitoFoundryClientSecret": {
+      "value": "${COGNITO_FOUNDRY_CLIENT_SECRET}"
+    },
+    "cognitoCopilotClientId": {
+      "value": "${COGNITO_COPILOT_CLIENT_ID=}"
+    },
+    "cognitoCopilotClientSecret": {
+      "value": "${COGNITO_COPILOT_CLIENT_SECRET}"
+    },
+    "mockFoundryClientSecret": {
+      "value": "${MOCK_FOUNDRY_CLIENT_SECRET}"
+    },
+    "mockCopilotClientSecret": {
+      "value": "${MOCK_COPILOT_CLIENT_SECRET}"
+    },
+    "awsMcpOrigin": {
+      "value": "${AWS_MCP_ORIGIN=}"
+    },
+    "enableTokenCache": {
+      "value": "${ENABLE_TOKEN_CACHE=true}"
+    },
+    "modelDeploymentName": {
+      "value": "${AZURE_OPENAI_DEPLOYMENT=gpt-5-mini}"
+    },
+    "enableFoundryMonitoring": {
+      "value": "${ENABLE_FOUNDRY_MONITORING=true}"
+    },
+    "agentName": {
+      "value": "${AGENT_NAME=aws-inventory-agent}"
+    },
+    "agentRequireApproval": {
+      "value": "${AGENT_REQUIRE_APPROVAL=always}"
+    },
+    "webExists": {
+      "value": "${SERVICE_WEB_RESOURCE_EXISTS=false}"
+    }
+  }
+}

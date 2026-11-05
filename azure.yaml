@@ -1,0 +1,42 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+# Deploys this whole repository with one `azd up` from the repo root. infra/main.bicep provisions the Azure resources.
+# The hooks run as the signed-in user: preup/preprovision create the Entra registrations and the secrets that Bicep
+# needs, and postprovision finishes the Entra setup and creates the Foundry agent. The AWS side is a mock inside
+# API Management. See the README section "Deploy everything with one azd up".
+name: mcpauth
+
+infra:
+  provider: bicep
+  path: infra
+  module: main
+
+services:
+  # The Entra chat app. Its Dockerfile builds from the repo root so it can copy the shared eval dataset.
+  web:
+    project: ./entra-chat-demo
+    host: containerapp
+    language: docker
+    docker:
+      path: ./Dockerfile
+      context: ..
+      # Builds in Azure Container Registry, so local Docker is not required.
+      remoteBuild: true
+
+hooks:
+  # Entra registrations and role assignments use the signed-in az user, matching the original demo setup.
+  # azd up resolves the Bicep parameters before preprovision fires, so it needs the registrations from preup.
+  # The script skips a repeat run that follows moments after a successful one; azd provision uses preprovision.
+  preup:
+    shell: pwsh
+    run: ./infra/hooks/preprovision.ps1
+  preprovision:
+    shell: pwsh
+    run: ./infra/hooks/preprovision.ps1
+  # Add the deployed redirect URI, grant the Foundry project identity access to the gateway API, and create the agent.
+  postprovision:
+    shell: pwsh
+    run: ./infra/hooks/postprovision.ps1
+  # azd down deletes the resource group but not the Entra registrations.
+  postdown:
+    shell: pwsh
+    run: ./infra/hooks/postdown.ps1

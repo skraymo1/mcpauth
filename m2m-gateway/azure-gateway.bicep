@@ -74,6 +74,16 @@ var mockAwsOperations = [
   { name: 'mock-mcp-delete', method: 'DELETE', urlTemplate: '/mcp' }
 ]
 
+// APIM reads its Key Vault secrets through a user-assigned identity, not a system-assigned one. APIM checks that access
+// when it creates a Key Vault named value, and a role assignment for a system-assigned identity (which exists only
+// once APIM does) had not propagated by then, so a first deployment failed with "Caller is not authorized". Here the
+// identity and its role assignments exist before APIM is created, so the roughly two minutes APIM takes to
+// provision give Azure RBAC time to propagate.
+resource apimIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: 'id-${apimName}'
+  location: location
+}
+
 resource apim 'Microsoft.ApiManagement/service@2024-05-01' = {
   name: apimName
   location: location
@@ -82,12 +92,19 @@ resource apim 'Microsoft.ApiManagement/service@2024-05-01' = {
     capacity: 0
   }
   identity: {
-    type: 'SystemAssigned'
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${apimIdentity.id}': {}
+    }
   }
   properties: {
     publisherEmail: publisherEmail
     publisherName: publisherName
   }
+  dependsOn: [
+    foundrySecretReader
+    copilotSecretReader
+  ]
 }
 
 resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
@@ -123,21 +140,21 @@ resource copilotSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
 
 // APIM's managed identity can read only these two secrets.
 resource foundrySecretReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(foundrySecret.id, apim.id, keyVaultSecretsUserRoleId)
+  name: guid(foundrySecret.id, apimIdentity.id, keyVaultSecretsUserRoleId)
   scope: foundrySecret
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', keyVaultSecretsUserRoleId)
-    principalId: apim.identity.principalId
+    principalId: apimIdentity.properties.principalId
     principalType: 'ServicePrincipal'
   }
 }
 
 resource copilotSecretReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(copilotSecret.id, apim.id, keyVaultSecretsUserRoleId)
+  name: guid(copilotSecret.id, apimIdentity.id, keyVaultSecretsUserRoleId)
   scope: copilotSecret
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', keyVaultSecretsUserRoleId)
-    principalId: apim.identity.principalId
+    principalId: apimIdentity.properties.principalId
     principalType: 'ServicePrincipal'
   }
 }
@@ -162,6 +179,7 @@ resource foundrySecretNamedValue 'Microsoft.ApiManagement/service/namedValues@20
     secret: true
     keyVault: {
       secretIdentifier: foundrySecret.properties.secretUri
+      identityClientId: apimIdentity.properties.clientId
     }
   }
   dependsOn: [
@@ -177,6 +195,7 @@ resource copilotSecretNamedValue 'Microsoft.ApiManagement/service/namedValues@20
     secret: true
     keyVault: {
       secretIdentifier: copilotSecret.properties.secretUri
+      identityClientId: apimIdentity.properties.clientId
     }
   }
   dependsOn: [
@@ -326,7 +345,7 @@ resource mockAwsPolicy 'Microsoft.ApiManagement/service/apis/policies@2024-05-01
 }
 
 output apimName string = apim.name
-output apimPrincipalId string = apim.identity.principalId
+output apimPrincipalId string = apimIdentity.properties.principalId
 output gatewayUrl string = apim.properties.gatewayUrl
 output foundryMcpUrl string = '${apim.properties.gatewayUrl}/foundry/mcp'
 output copilotMcpUrl string = '${apim.properties.gatewayUrl}/copilot/mcp'

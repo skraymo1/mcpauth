@@ -206,6 +206,13 @@ them contact Entra or Azure OpenAI, so they do not replace a real sign-in.
 
 ## Deploy to Azure with azd
 
+This deploys the chat app on its own. To deploy it together with the M2M gateway
+and the Foundry project, run `azd up` from the repository root instead (see the
+[root README](../README.md#deploy-everything-with-one-azd-up)). That deployment
+reuses these Bicep modules and uses root-level pre/postprovision hooks for Entra,
+authenticated as the signed-in `az` user. Both create registrations with the same
+display names, so use a different azd environment name for each.
+
 Prerequisites: [azd](https://aka.ms/azd), Azure CLI, PowerShell 7+, and an Entra
 account that can register applications and create Azure resources.
 

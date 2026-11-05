@@ -24,76 +24,32 @@ param openAiDeployment string
 
 var placeholderImage = 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
 
+// The deployed image is read here and the app is declared in a child module. ARM reports a circular dependency
+// when one template both declares a Container App and reads that app's properties.
 resource existingApp 'Microsoft.App/containerApps@2024-03-01' existing = if (exists) {
   name: name
 }
 
-resource app 'Microsoft.App/containerApps@2024-03-01' = {
-  name: name
-  location: location
-  // azd matches the "web" service in azure.yaml to this app through the tag.
-  tags: union(tags, { 'azd-service-name': 'web' })
-  identity: {
-    type: 'UserAssigned'
-    userAssignedIdentities: {
-      '${identityId}': {}
-    }
-  }
-  properties: {
-    managedEnvironmentId: environmentId
-    configuration: {
-      activeRevisionsMode: 'Single'
-      ingress: {
-        external: true
-        targetPort: 8000
-        transport: 'auto'
-        allowInsecure: false
-      }
-      registries: [
-        {
-          server: registryServer
-          identity: identityId
-        }
-      ]
-      secrets: [
-        {
-          name: 'oidc-client-secret'
-          value: oidcClientSecret
-        }
-      ]
-    }
-    template: {
-      containers: [
-        {
-          name: 'web'
-          image: exists ? existingApp!.properties.template.containers[0].image : placeholderImage
-          resources: {
-            cpu: json('0.5')
-            memory: '1Gi'
-          }
-          env: [
-            { name: 'AUTH_MODE', value: 'entra' }
-            { name: 'ENTRA_TENANT_ID', value: entraTenantId }
-            { name: 'OIDC_CLIENT_ID', value: oidcClientId }
-            { name: 'OIDC_CLIENT_SECRET', secretRef: 'oidc-client-secret' }
-            { name: 'API_AUDIENCE', value: apiAudience }
-            { name: 'WEB_URL', value: webUrl }
-            { name: 'WEB_PORT', value: '8000' }
-            { name: 'WEB_BIND_HOST', value: '0.0.0.0' }
-            { name: 'AZURE_OPENAI_ENDPOINT', value: openAiEndpoint }
-            { name: 'AZURE_OPENAI_DEPLOYMENT', value: openAiDeployment }
-            { name: 'MODEL_IDENTITY_CLIENT_ID', value: identityClientId }
-          ]
-        }
-      ]
-      // Sessions and tokens live in this process's memory, so run exactly one replica.
-      scale: {
-        minReplicas: 1
-        maxReplicas: 1
-      }
-    }
+module app 'containerapp-resource.bicep' = {
+  name: '${deployment().name}-app'
+  params: {
+    name: name
+    location: location
+    tags: tags
+    environmentId: environmentId
+    identityId: identityId
+    identityClientId: identityClientId
+    registryServer: registryServer
+    image: exists ? existingApp!.properties.template.containers[0].image : placeholderImage
+    webUrl: webUrl
+    entraTenantId: entraTenantId
+    oidcClientId: oidcClientId
+    apiAudience: apiAudience
+    oidcClientSecret: oidcClientSecret
+    openAiEndpoint: openAiEndpoint
+    openAiDeployment: openAiDeployment
   }
 }
 
-output name string = app.name
-output fqdn string = app.properties.configuration.ingress.fqdn
+output name string = app.outputs.name
+output fqdn string = app.outputs.fqdn

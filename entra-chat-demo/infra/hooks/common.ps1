@@ -5,6 +5,7 @@ $ErrorActionPreference = "Stop"
 $PSNativeCommandUseErrorActionPreference = $false
 
 $script:OwnerTag = "EntraMcpChatDemo"
+$script:PermissionErrorPattern = "Authorization_RequestDenied|Insufficient privileges"
 
 function Get-HookContext {
     foreach ($name in "AZURE_ENV_NAME", "AZURE_SUBSCRIPTION_ID") {
@@ -43,7 +44,13 @@ function Invoke-Graph([string]$Method, [string]$Path, [hashtable]$Body) {
         if ($LASTEXITCODE -ne 0) {
             $detail = (Get-Content -LiteralPath $errorFile -Raw)
             if ($detail.Length -gt 600) { $detail = $detail.Substring(0, 600) }
-            throw "Microsoft Graph $Method $Path failed: $($detail.Trim())"
+            $message = "Microsoft Graph $Method $Path failed: $($detail.Trim())"
+            if ($detail -match $script:PermissionErrorPattern) {
+                $message += " Your Entra account is not allowed to make this change. Activate the Cloud Application " +
+                    "Administrator or Application Administrator role in Privileged Identity Management (PIM), run " +
+                    "az logout and az login so the role is in your token, then rerun. An administrator can also do it."
+            }
+            throw $message
         }
         if ($output) { return ($output | ConvertFrom-Json) }
     }
@@ -54,11 +61,12 @@ function Invoke-Graph([string]$Method, [string]$Path, [hashtable]$Body) {
 }
 
 # A new application takes a few seconds to replicate, so calls that reference it can briefly fail.
+# A permission error never clears by waiting, so it is raised immediately.
 function Invoke-GraphWithRetry([string]$Method, [string]$Path, [hashtable]$Body) {
     for ($attempt = 1; ; $attempt++) {
         try { return Invoke-Graph $Method $Path $Body }
         catch {
-            if ($attempt -ge 6) { throw }
+            if ($attempt -ge 6 -or $_.Exception.Message -match $script:PermissionErrorPattern) { throw }
             Write-Host "Waiting for Entra to replicate (attempt $attempt of 6)..."
             Start-Sleep -Seconds (4 * $attempt)
         }
@@ -78,9 +86,16 @@ function Get-DemoApp([string]$Name, [hashtable]$Definition) {
         if ($apps[0].tags -notcontains $script:OwnerTag) {
             throw "$Name exists but was not created by this demo. Refusing to change it."
         }
+        if ($apps[0].uniqueName -and $apps[0].uniqueName -ne $Name) {
+            throw "$Name has a different immutable uniqueName. Refusing to change it."
+        }
+        if (-not $apps[0].uniqueName) {
+            $null = Invoke-GraphWithRetry PATCH "/applications/$($apps[0].id)" @{ uniqueName = $Name }
+        }
         return $apps[0]
     }
     $Definition.displayName = $Name
+    $Definition.uniqueName = $Name
     $Definition.signInAudience = "AzureADMyOrg"
     $Definition.tags = @($script:OwnerTag)
     return Invoke-Graph POST "/applications" $Definition

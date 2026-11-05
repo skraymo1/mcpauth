@@ -3,7 +3,7 @@ targetScope = 'resourceGroup'
 @description('Name of the existing API Management instance.')
 param apiManagementName string
 
-@description('Resource ID of the Azure Managed Redis cluster.')
+@description('Resource ID of the Azure Managed Redis cluster. API Management requires an absolute URL, so an ARM ID that starts with / is expanded with the Resource Manager endpoint.')
 param redisResourceId string
 
 @secure()
@@ -14,6 +14,7 @@ param redisConnectionString string
 param useFromLocation string = resourceGroup().location
 
 var policyXml = loadTextContent('apim-policy.xml')
+var redisResourceUrl = startsWith(redisResourceId, '/') ? '${environment().resourceManager}${substring(redisResourceId, 1)}' : redisResourceId
 
 resource apim 'Microsoft.ApiManagement/service@2024-05-01' existing = {
   name: apiManagementName
@@ -35,7 +36,7 @@ resource externalCache 'Microsoft.ApiManagement/service/caches@2024-05-01' = {
   properties: {
     connectionString: redisConnectionString
     description: 'External Redis cache for Cognito access tokens'
-    resourceId: redisResourceId
+    resourceId: redisResourceUrl
     useFromLocation: useFromLocation
   }
 }
